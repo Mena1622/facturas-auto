@@ -7,11 +7,10 @@ from email.mime.base import MIMEBase
 from email import encoders
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
 from googleapiclient.discovery import build
-from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from supabase import create_client
@@ -19,27 +18,23 @@ from config import SUPABASE_URL, SUPABASE_KEY, CORREO_DESTINO
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-SCOPES       = ['https://www.googleapis.com/auth/gmail.send']
-AZUL_OSCURO  = colors.HexColor("#1B2A4A")
-AZUL_MEDIO   = colors.HexColor("#2E5090")
-GRIS_CLARO   = colors.HexColor("#F7F9FC")
-GRIS_BORDE   = colors.HexColor("#D0D7E3")
-VERDE_TOTAL  = colors.HexColor("#2E7D32")
-BLANCO       = colors.white
-NEGRO        = colors.HexColor("#1B2A4A")
+SCOPES      = ['https://www.googleapis.com/auth/gmail.send']
+AZUL_OSCURO = colors.HexColor("#1B2A4A")
+AZUL_MEDIO  = colors.HexColor("#2E5090")
+GRIS_CLARO  = colors.HexColor("#F7F9FC")
+GRIS_BORDE  = colors.HexColor("#D0D7E3")
+VERDE_TOTAL = colors.HexColor("#2E7D32")
+BLANCO      = colors.white
+NEGRO       = colors.HexColor("#1B2A4A")
 
 def autenticar_gmail():
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
+    token_data = os.getenv("GMAIL_TOKEN")
+    if token_data:
+        with open('token.json', 'w') as f:
+            f.write(token_data)
+    creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
     return build('gmail', 'v1', credentials=creds)
 
 def formato_colones(monto):
@@ -48,11 +43,13 @@ def formato_colones(monto):
 def obtener_facturas_del_mes(anio, mes):
     desde = f"{anio}-{mes:02d}-01"
     hasta = f"{anio}-{mes:02d}-31"
-    result = supabase.table('facturas') \
-        .select('*') \
-        .gte('fecha_recibido', desde) \
-        .lte('fecha_recibido', hasta) \
+    result = (
+        supabase.table('facturas')
+        .select('*')
+        .gte('fecha_recibido', desde)
+        .lte('fecha_recibido', hasta)
         .execute()
+    )
     return result.data
 
 def enviar_por_gmail(service, archivo, nombre_mes):
@@ -119,18 +116,12 @@ def generar_reporte(anio=None, mes=None):
 
     elementos = []
 
-    titulo_style = ParagraphStyle('titulo',
-        fontSize=22, textColor=AZUL_OSCURO,
-        fontName='Helvetica-Bold', alignment=1,
-        spaceAfter=8)
-    mes_style = ParagraphStyle('mes',
-        fontSize=14, textColor=AZUL_MEDIO,
-        fontName='Helvetica-Bold', alignment=1,
-        spaceBefore=6, spaceAfter=6)
-    meta_style = ParagraphStyle('meta',
-        fontSize=8, textColor=colors.HexColor("#7F8C8D"),
-        fontName='Helvetica', alignment=1,
-        spaceBefore=4, spaceAfter=0)
+    titulo_style = ParagraphStyle('titulo', fontSize=22, textColor=AZUL_OSCURO,
+        fontName='Helvetica-Bold', alignment=1, spaceAfter=8)
+    mes_style = ParagraphStyle('mes', fontSize=14, textColor=AZUL_MEDIO,
+        fontName='Helvetica-Bold', alignment=1, spaceBefore=6, spaceAfter=6)
+    meta_style = ParagraphStyle('meta', fontSize=8, textColor=colors.HexColor("#7F8C8D"),
+        fontName='Helvetica', alignment=1, spaceBefore=4, spaceAfter=0)
 
     elementos.append(Spacer(1, 0.3*cm))
     elementos.append(Paragraph("Reporte de Facturas Electrónicas", titulo_style))
@@ -143,11 +134,11 @@ def generar_reporte(anio=None, mes=None):
     elementos.append(HRFlowable(width="100%", thickness=1.5, color=AZUL_OSCURO))
     elementos.append(Spacer(1, 0.5*cm))
 
-    def th(t):  return Paragraph(t, ParagraphStyle('th',  fontSize=8, textColor=BLANCO,      fontName='Helvetica-Bold', alignment=1))
-    def td(t):  return Paragraph(t, ParagraphStyle('td',  fontSize=8, textColor=NEGRO,       fontName='Helvetica',      alignment=2))
-    def tdl(t): return Paragraph(t, ParagraphStyle('tdl', fontSize=8, textColor=NEGRO,       fontName='Helvetica',      alignment=0))
-    def tt(t):  return Paragraph(t, ParagraphStyle('tt',  fontSize=8, textColor=BLANCO,      fontName='Helvetica-Bold', alignment=2))
-    def ttl(t): return Paragraph(t, ParagraphStyle('ttl', fontSize=8, textColor=BLANCO,      fontName='Helvetica-Bold', alignment=0))
+    def th(t):  return Paragraph(t, ParagraphStyle('th',  fontSize=8, textColor=BLANCO, fontName='Helvetica-Bold', alignment=1))
+    def td(t):  return Paragraph(t, ParagraphStyle('td',  fontSize=8, textColor=NEGRO,  fontName='Helvetica',      alignment=2))
+    def tdl(t): return Paragraph(t, ParagraphStyle('tdl', fontSize=8, textColor=NEGRO,  fontName='Helvetica',      alignment=0))
+    def tt(t):  return Paragraph(t, ParagraphStyle('tt',  fontSize=8, textColor=BLANCO, fontName='Helvetica-Bold', alignment=2))
+    def ttl(t): return Paragraph(t, ParagraphStyle('ttl', fontSize=8, textColor=BLANCO, fontName='Helvetica-Bold', alignment=0))
 
     filas = [[
         th('Distribuidor'), th('Fact.'), th('Sin IVA'),
@@ -157,8 +148,7 @@ def generar_reporte(anio=None, mes=None):
 
     for emisor, d in sorted(distribuidores.items()):
         filas.append([
-            tdl(emisor),
-            td(str(d['cantidad'])),
+            tdl(emisor), td(str(d['cantidad'])),
             td(formato_colones(d['monto_sin_iva'])),
             td(formato_colones(d['iva_1'])),
             td(formato_colones(d['iva_2'])),
@@ -216,9 +206,4 @@ def generar_reporte(anio=None, mes=None):
         service = autenticar_gmail()
         enviar_por_gmail(service, nombre_archivo, nombre_mes)
         os.remove(nombre_archivo)
-        print(f"🗑️ PDF eliminado del repo local")
-    except Exception as e:
-        print(f"⚠️ No se pudo enviar: {e}")
-
-if __name__ == "__main__":
-    generar_reporte()
+        print(f"🗑️ PDF el

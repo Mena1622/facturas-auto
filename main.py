@@ -1,29 +1,29 @@
 import base64
 import os
+import json
 import datetime
 from googleapiclient.discovery import build
-from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 from parser import parsear_xml
 from database import guardar_factura, ya_existe
-from config import CORREO_DESTINO, ETIQUETA_GMAIL, LIMITE_CORREOS_TEST
+from config import CORREO_DESTINO, CORREO_ORIGEN, ETIQUETA_GMAIL, LIMITE_CORREOS_TEST
 
 SCOPES = ['https://www.googleapis.com/auth/gmail.modify',
           'https://www.googleapis.com/auth/gmail.send']
 
 def autenticar_gmail():
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
+    token_data = os.getenv("GMAIL_TOKEN")
+    if token_data:
+        with open('token.json', 'w') as f:
+            f.write(token_data)
+    creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
     return build('gmail', 'v1', credentials=creds)
 
 def obtener_id_etiqueta(service, nombre):
@@ -57,16 +57,12 @@ def tiene_adjunto_xml(service, msg_id):
     return xmls
 
 def reenviar_correo(service, msg_id, destino):
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-    from email.mime.base import MIMEBase
-    from email import encoders
-
     msg_original = service.users().messages().get(userId='me', id=msg_id).execute()
     headers = msg_original.get('payload', {}).get('headers', [])
     asunto = next((h['value'] for h in headers if h['name'] == 'Subject'), 'Factura Electrónica')
 
     nuevo = MIMEMultipart()
+    nuevo['From'] = CORREO_ORIGEN
     nuevo['To'] = destino
     nuevo['Subject'] = f"FWD: {asunto}"
     nuevo.attach(MIMEText("Factura electrónica reenviada automáticamente por facturas-auto.", 'plain'))
@@ -105,8 +101,7 @@ def procesar_correos():
         print(f"❌ No se encontró la etiqueta '{ETIQUETA_GMAIL}' en Gmail")
         return
 
-    # ✅ -subject:FWD excluye los reenvíos generados por este mismo script
-    query = f"-label:{ETIQUETA_GMAIL} -from:mgamboafacturas@gmail.com -subject:FWD"
+    query = f"-label:{ETIQUETA_GMAIL} -from:{CORREO_ORIGEN} -subject:FWD"
     results = service.users().messages().list(
         userId='me', q=query, maxResults=LIMITE_CORREOS_TEST).execute()
     mensajes = results.get('messages', [])

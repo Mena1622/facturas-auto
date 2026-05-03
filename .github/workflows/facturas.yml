@@ -1,0 +1,41 @@
+name: Facturas Auto
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+    - cron: '0 8 1 * *'
+  workflow_dispatch:
+
+jobs:
+  procesar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Procesar facturas
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          CORREO_ORIGEN: ${{ secrets.CORREO_ORIGEN }}
+          CORREO_DESTINO: ${{ secrets.CORREO_DESTINO }}
+          ETIQUETA_GMAIL: ${{ secrets.ETIQUETA_GMAIL }}
+          GMAIL_TOKEN: ${{ secrets.GMAIL_TOKEN }}
+        run: python main.py
+
+      - name: Enviar reporte mensual
+        if: github.event.schedule == '0 8 1 * *'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          CORREO_DESTINO: ${{ secrets.CORREO_DESTINO }}
+          GMAIL_TOKEN: ${{ secrets.GMAIL_TOKEN }}
+        run: python reporte.py

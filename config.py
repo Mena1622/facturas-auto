@@ -1,10 +1,9 @@
-# Configuración general del proyecto
+import os
 
-SUPABASE_URL = "https://wnokmhpkpsajrkqegold.supabase.co"
-SUPABASE_KEY = "sb_secret_0YG1gEQCAoDHu8MmBQYNDw_GoXUOMaz"
-
-CORREO_ORIGEN = "mgamboafacturas@gmail.com"
-CORREO_DESTINO = "andrwgame162@gmail.com"
-ETIQUETA_GMAIL = "Facturas-Auto"
-
-LIMITE_CORREOS_TEST = 10
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+CORREO_ORIGEN = os.getenv("CORREO_ORIGEN")
+CORREO_DESTINO = os.getenv("CORREO_DESTINO")
+ETIQUETA_GMAIL = os.getenv("ETIQUETA_GMAIL")
+LIMITE_CORREOS_TEST = int(os.getenv("LIMITE_CORREOS_TEST", "10"))
+GMAIL_PASSWORD = os.getenv("GMAIL_PASSWORD")
