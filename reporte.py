@@ -206,4 +206,7 @@ def generar_reporte(anio=None, mes=None):
         service = autenticar_gmail()
         enviar_por_gmail(service, nombre_archivo, nombre_mes)
         os.remove(nombre_archivo)
-        print(f"🗑️ PDF el
+        print(
+            f"🗑️ PDF eliminado: {nombre_pdf}\n"
+            f"Se envió correctamente el reporte."
+        )
