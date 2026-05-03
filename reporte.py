@@ -14,8 +14,7 @@ from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from supabase import create_client
-from config import SUPABASE_URL, SUPABASE_KEY, CORREO_DESTINO
-
+from config import SUPABASE_URL, SUPABASE_KEY, CORREO_REPORTE_DESTINO
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -28,7 +27,6 @@ VERDE_TOTAL = colors.HexColor("#2E7D32")
 BLANCO = colors.white
 NEGRO = colors.HexColor("#1B2A4A")
 
-
 def autenticar_gmail():
     token_data = os.getenv("GMAIL_TOKEN")
     if token_data:
@@ -39,10 +37,8 @@ def autenticar_gmail():
         creds.refresh(Request())
     return build('gmail', 'v1', credentials=creds)
 
-
 def formato_colones(monto):
     return f"₡{monto:,.2f}"
-
 
 def obtener_facturas_del_mes(anio, mes):
     desde = f"{anio}-{mes:02d}-01"
@@ -56,10 +52,9 @@ def obtener_facturas_del_mes(anio, mes):
     )
     return result.data
 
-
 def enviar_por_gmail(service, archivo, nombre_mes):
     msg = MIMEMultipart()
-    msg['To'] = CORREO_DESTINO
+    msg['To'] = CORREO_REPORTE_DESTINO
     msg['Subject'] = f"Reporte de Facturas Electrónicas - {nombre_mes}"
     msg.attach(MIMEText(
         f"Adjunto el reporte de facturas electrónicas correspondiente a {nombre_mes}.",
@@ -76,8 +71,7 @@ def enviar_por_gmail(service, archivo, nombre_mes):
         msg.attach(adjunto)
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode('utf-8')
     service.users().messages().send(userId='me', body={'raw': raw}).execute()
-    print(f"📧 Reporte enviado a {CORREO_DESTINO}")
-
+    print(f"📧 Reporte enviado a {CORREO_REPORTE_DESTINO}")
 
 def generar_reporte(anio=None, mes=None):
     hoy = datetime.date.today()
@@ -220,7 +214,6 @@ def generar_reporte(anio=None, mes=None):
         print("Se envió correctamente el reporte.")
     except Exception as e:
         print(f"❌ Error enviando el reporte: {e}")
-
 
 if __name__ == "__main__":
     generar_reporte()
