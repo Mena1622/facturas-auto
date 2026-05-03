@@ -23,5 +23,6 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          CORREO_REPORTE_DESTINO: ${{ secrets.CORREO_REPORTE_DESTINO }}
           GMAIL_TOKEN: ${{ secrets.GMAIL_TOKEN }}
         run: python reporte.py
