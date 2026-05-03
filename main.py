@@ -101,24 +101,27 @@ def procesar_correos():
         print(f"❌ No se encontró la etiqueta '{ETIQUETA_GMAIL}'")
         return
 
-    # Buscamos correos que NO tengan la etiqueta
-    query = f"-label:{ETIQUETA_GMAIL} -from:{CORREO_ORIGEN} -subject:FWD"
+    # BUSCAMOS LOS ÚLTIMOS 10 CORREOS EN TOTAL
+    query = f"-from:{CORREO_ORIGEN} -subject:FWD"
     results = service.users().messages().list(
         userId='me', q=query, maxResults=LIMITE_CORREOS_TEST).execute()
     
     mensajes = results.get('messages', [])
-
     if not mensajes:
-        print("📭 No hay correos nuevos. Terminando ejecución.")
+        print("📭 No hay correos recientes.")
         return
-
-    print(f"📬 {len(mensajes)} correos encontrados para procesar")
 
     for msg in mensajes:
         msg_id = msg['id']
-        xmls = tiene_adjunto_xml(service, msg_id)
+        msg_data = service.users().messages().get(userId='me', id=msg_id).execute()
+        label_ids = msg_data.get('labelIds', [])
 
-        # Si no hay XMLs, marcamos como procesado y saltamos
+        # SI YA TIENE ETIQUETA, IGNORAR Y PASAR AL SIGUIENTE
+        if label_id in label_ids:
+            continue
+
+        # Si no tiene etiqueta, verificamos XML
+        xmls = tiene_adjunto_xml(service, msg_id)
         if not xmls:
             print(f"⏭️  Sin XMLs, saltando correo {msg_id}")
             etiquetar_correo(service, msg_id, label_id)
@@ -134,7 +137,6 @@ def procesar_correos():
             etiquetar_correo(service, msg_id, label_id)
             continue
 
-        # Verificamos si al menos una factura es nueva
         hay_nuevas = any(not ya_existe(d.get('clave')) for _, _, d in facturas_validas)
 
         if not hay_nuevas:
@@ -142,7 +144,6 @@ def procesar_correos():
             etiquetar_correo(service, msg_id, label_id)
             continue
 
-        # Procesamiento
         try:
             reenviar_correo(service, msg_id, CORREO_DESTINO)
             etiquetar_correo(service, msg_id, label_id)
