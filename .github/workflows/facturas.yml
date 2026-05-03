@@ -1,10 +1,9 @@
 name: Facturas Auto
 
 on:
+  workflow_dispatch:
   schedule:
     - cron: '*/10 * * * *'
-    - cron: '0 8 1 * *'
-  workflow_dispatch:
 
 jobs:
   procesar:
@@ -33,7 +32,7 @@ jobs:
         run: python main.py
 
       - name: Enviar reporte mensual
-        if: github.event.schedule == '0 8 1 * *'
+        if: github.event_name == 'workflow_dispatch'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
