@@ -70,7 +70,7 @@ def reenviar_correo(service, msg_id, destino):
     partes = collect_parts(msg_original.get('payload', {}))
     for parte in partes:
         nombre = parte.get('filename', '')
-        if nombre.lower().endswith('.xml') or nombre.lower().endswith('.pdf'):
+        if nombre.lower().endswith(('.xml', '.pdf')):
             attachment_id = parte.get('body', {}).get('attachmentId')
             if attachment_id:
                 att = service.users().messages().attachments().get(
@@ -98,30 +98,29 @@ def procesar_correos():
     label_id = obtener_id_etiqueta(service, ETIQUETA_GMAIL)
 
     if not label_id:
-        print(f"❌ No se encontró la etiqueta '{ETIQUETA_GMAIL}' en Gmail")
+        print(f"❌ No se encontró la etiqueta '{ETIQUETA_GMAIL}'")
         return
 
+    # Buscamos correos que NO tengan la etiqueta
     query = f"-label:{ETIQUETA_GMAIL} -from:{CORREO_ORIGEN} -subject:FWD"
     results = service.users().messages().list(
         userId='me', q=query, maxResults=LIMITE_CORREOS_TEST).execute()
+    
     mensajes = results.get('messages', [])
 
     if not mensajes:
-        print("📭 No hay correos nuevos para procesar")
+        print("📭 No hay correos nuevos. Terminando ejecución.")
         return
 
-    print(f"📬 {len(mensajes)} correos encontrados")
+    print(f"📬 {len(mensajes)} correos encontrados para procesar")
 
     for msg in mensajes:
         msg_id = msg['id']
         xmls = tiene_adjunto_xml(service, msg_id)
 
-        msg_debug = service.users().messages().get(userId='me', id=msg_id).execute()
-        headers_debug = msg_debug.get('payload', {}).get('headers', [])
-        asunto_debug = next((h['value'] for h in headers_debug if h['name'] == 'Subject'), 'Sin asunto')
-        print(f"📧 {asunto_debug[:70]} | XMLs: {len(xmls)}")
-
+        # Si no hay XMLs, marcamos como procesado y saltamos
         if not xmls:
+            print(f"⏭️  Sin XMLs, saltando correo {msg_id}")
             etiquetar_correo(service, msg_id, label_id)
             continue
 
@@ -135,30 +134,27 @@ def procesar_correos():
             etiquetar_correo(service, msg_id, label_id)
             continue
 
+        # Verificamos si al menos una factura es nueva
         hay_nuevas = any(not ya_existe(d.get('clave')) for _, _, d in facturas_validas)
 
         if not hay_nuevas:
-            print(f"⏭️  Factura ya existe, omitiendo...")
+            print(f"⏭️  Facturas ya procesadas previamente...")
             etiquetar_correo(service, msg_id, label_id)
             continue
 
-        print(f"\n📄 Procesando correo con {len(facturas_validas)} factura(s)...")
-        estado = "reenviado"
-
+        # Procesamiento
         try:
             reenviar_correo(service, msg_id, CORREO_DESTINO)
             etiquetar_correo(service, msg_id, label_id)
-            print(f"✅ Reenviado a {CORREO_DESTINO}")
+            print(f"✅ Reenviado y etiquetado: {msg_id}")
+            
+            for _, _, datos in facturas_validas:
+                if not ya_existe(datos.get('clave')):
+                    datos['estado'] = "reenviado"
+                    datos['fecha_reenvio'] = datetime.datetime.now().isoformat()
+                    guardar_factura(datos)
         except Exception as e:
-            estado = "error_reenvio"
-            print(f"❌ Error al reenviar: {e}")
-
-        for _, _, datos in facturas_validas:
-            if not ya_existe(datos.get('clave')):
-                datos['estado'] = estado
-                datos['fecha_reenvio'] = datetime.datetime.now().isoformat()
-                guardar_factura(datos)
-                print(f"✅ Guardado: {datos.get('emisor', 'Desconocido')}")
+            print(f"❌ Error al procesar {msg_id}: {e}")
 
 if __name__ == "__main__":
     procesar_correos()
