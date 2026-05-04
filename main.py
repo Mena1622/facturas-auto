@@ -2,6 +2,7 @@ import base64
 import os
 import json
 import datetime
+import email
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -57,30 +58,49 @@ def tiene_adjunto_xml(service, msg_id):
     return xmls
 
 def reenviar_correo(service, msg_id, destino):
-    msg_original = service.users().messages().get(userId='me', id=msg_id).execute()
-    headers = msg_original.get('payload', {}).get('headers', [])
-    asunto = next((h['value'] for h in headers if h['name'] == 'Subject'), 'Factura Electrónica')
+    # Obtener el correo original completo en formato RAW
+    msg_raw = service.users().messages().get(
+        userId='me',
+        id=msg_id,
+        format='raw'
+    ).execute()
 
+    raw_bytes = base64.urlsafe_b64decode(msg_raw['raw'])
+    original = email.message_from_bytes(raw_bytes)
+
+    # Construir nuevo mensaje conservando cuerpo y adjuntos originales
     nuevo = MIMEMultipart()
     nuevo['From'] = CORREO_ORIGEN
     nuevo['To'] = destino
-    nuevo['Subject'] = f"FWD: {asunto}"
-    nuevo.attach(MIMEText("Factura electrónica reenviada automáticamente por facturas-auto.", 'plain'))
+    nuevo['Subject'] = original.get('Subject', 'Factura Electrónica')
 
-    partes = collect_parts(msg_original.get('payload', {}))
-    for parte in partes:
-        nombre = parte.get('filename', '')
-        if nombre.lower().endswith(('.xml', '.pdf')):
-            attachment_id = parte.get('body', {}).get('attachmentId')
-            if attachment_id:
-                att = service.users().messages().attachments().get(
-                    userId='me', messageId=msg_id, id=attachment_id).execute()
-                datos = base64.urlsafe_b64decode(att['data'])
-                adjunto = MIMEBase('application', 'octet-stream')
-                adjunto.set_payload(datos)
+    if original.is_multipart():
+        for parte in original.walk():
+            content_type = parte.get_content_type()
+            content_disposition = str(parte.get('Content-Disposition', ''))
+            payload = parte.get_payload(decode=True)
+
+            if payload is None:
+                continue
+
+            if 'attachment' in content_disposition:
+                filename = parte.get_filename()
+                adjunto = MIMEBase(*content_type.split('/'))
+                adjunto.set_payload(payload)
                 encoders.encode_base64(adjunto)
-                adjunto.add_header('Content-Disposition', f'attachment; filename="{nombre}"')
+                adjunto.add_header('Content-Disposition', 'attachment', filename=filename)
                 nuevo.attach(adjunto)
+            elif content_type == 'text/plain':
+                nuevo.attach(MIMEText(
+                    payload.decode('utf-8', errors='replace'), 'plain'))
+            elif content_type == 'text/html':
+                nuevo.attach(MIMEText(
+                    payload.decode('utf-8', errors='replace'), 'html'))
+    else:
+        payload = original.get_payload(decode=True)
+        if payload:
+            nuevo.attach(MIMEText(
+                payload.decode('utf-8', errors='replace'), 'plain'))
 
     raw = base64.urlsafe_b64encode(nuevo.as_bytes()).decode('utf-8')
     service.users().messages().send(userId='me', body={'raw': raw}).execute()
@@ -101,11 +121,10 @@ def procesar_correos():
         print(f"❌ No se encontró la etiqueta '{ETIQUETA_GMAIL}'")
         return
 
-    # BUSCAMOS LOS ÚLTIMOS 10 CORREOS EN TOTAL
     query = f"-from:{CORREO_ORIGEN} -subject:FWD"
     results = service.users().messages().list(
         userId='me', q=query, maxResults=LIMITE_CORREOS_TEST).execute()
-    
+
     mensajes = results.get('messages', [])
     if not mensajes:
         print("📭 No hay correos recientes.")
@@ -116,11 +135,9 @@ def procesar_correos():
         msg_data = service.users().messages().get(userId='me', id=msg_id).execute()
         label_ids = msg_data.get('labelIds', [])
 
-        # SI YA TIENE ETIQUETA, IGNORAR Y PASAR AL SIGUIENTE
         if label_id in label_ids:
             continue
 
-        # Si no tiene etiqueta, verificamos XML
         xmls = tiene_adjunto_xml(service, msg_id)
         if not xmls:
             print(f"⏭️  Sin XMLs, saltando correo {msg_id}")
@@ -148,7 +165,7 @@ def procesar_correos():
             reenviar_correo(service, msg_id, CORREO_DESTINO)
             etiquetar_correo(service, msg_id, label_id)
             print(f"✅ Reenviado y etiquetado: {msg_id}")
-            
+
             for _, _, datos in facturas_validas:
                 if not ya_existe(datos.get('clave')):
                     datos['estado'] = "reenviado"
