@@ -29,7 +29,9 @@ def autenticar_gmail():
 
 def obtener_id_etiqueta(service, nombre):
     labels = service.users().labels().list(userId='me').execute()
+    print("Etiquetas disponibles en Gmail API:")
     for label in labels.get('labels', []):
+        print(f"- [{label['name']}]")
         if label['name'] == nombre:
             return label['id']
     return None
@@ -115,6 +117,10 @@ def etiquetar_correo(service, msg_id, label_id):
 def procesar_correos():
     print(f"\n🔍 Iniciando procesamiento - {datetime.datetime.now()}")
     service = autenticar_gmail()
+
+    perfil = service.users().getProfile(userId='me').execute()
+    print(f"Cuenta autenticada: {perfil.get('emailAddress')}")
+    
     label_id = obtener_id_etiqueta(service, ETIQUETA_GMAIL)
 
     if not label_id:
