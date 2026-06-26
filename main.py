@@ -1,21 +1,21 @@
 import base64
 import os
-import json
 import datetime
 import email
+from email import policy as email_policy
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
 from parser import parsear_xml
 from database import guardar_factura, ya_existe
 from config import CORREO_DESTINO, CORREO_ORIGEN, ETIQUETA_GMAIL, LIMITE_CORREOS_TEST
 
-SCOPES = ['https://www.googleapis.com/auth/gmail.modify',
-          'https://www.googleapis.com/auth/gmail.send']
+
+SCOPES = [
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/gmail.send',
+]
+
 
 def autenticar_gmail():
     token_data = os.getenv("GMAIL_TOKEN")
@@ -27,6 +27,7 @@ def autenticar_gmail():
         creds.refresh(Request())
     return build('gmail', 'v1', credentials=creds)
 
+
 def obtener_id_etiqueta(service, nombre):
     labels = service.users().labels().list(userId='me').execute()
     print("Etiquetas disponibles en Gmail API:")
@@ -36,6 +37,7 @@ def obtener_id_etiqueta(service, nombre):
             return label['id']
     return None
 
+
 def collect_parts(payload):
     result = []
     if payload.get('filename'):
@@ -43,6 +45,7 @@ def collect_parts(payload):
     for p in payload.get('parts', []):
         result += collect_parts(p)
     return result
+
 
 def tiene_adjunto_xml(service, msg_id):
     msg = service.users().messages().get(userId='me', id=msg_id).execute()
@@ -59,53 +62,34 @@ def tiene_adjunto_xml(service, msg_id):
                 xmls.append((nombre, datos))
     return xmls
 
+
 def reenviar_correo(service, msg_id, destino):
-    # Obtener el correo original completo en formato RAW
+    """
+    Reenvía el correo de forma FIEL al original.
+    Obtiene el RAW completo y modifica SOLO los headers To:/From:/Message-ID,
+    dejando body, HTML, adjuntos e imágenes inline 100% intactos.
+    """
     msg_raw = service.users().messages().get(
-        userId='me',
-        id=msg_id,
-        format='raw'
-    ).execute()
+        userId='me', id=msg_id, format='raw').execute()
 
     raw_bytes = base64.urlsafe_b64decode(msg_raw['raw'])
-    original = email.message_from_bytes(raw_bytes)
+    original  = email.message_from_bytes(raw_bytes, policy=email_policy.compat32)
 
-    # Construir nuevo mensaje conservando cuerpo y adjuntos originales
-    nuevo = MIMEMultipart()
-    nuevo['From'] = CORREO_ORIGEN
-    nuevo['To'] = destino
-    nuevo['Subject'] = original.get('Subject', 'Factura Electrónica')
+    # Eliminar headers de enrutamiento/autenticación del mensaje original
+    for header in ['To', 'Cc', 'Bcc', 'From', 'Message-ID',
+                   'DKIM-Signature', 'ARC-Seal',
+                   'ARC-Message-Signature', 'ARC-Authentication-Results']:
+        del original[header]
 
-    if original.is_multipart():
-        for parte in original.walk():
-            content_type = parte.get_content_type()
-            content_disposition = str(parte.get('Content-Disposition', ''))
-            payload = parte.get_payload(decode=True)
+    original['From'] = CORREO_ORIGEN
+    original['To']   = destino
 
-            if payload is None:
-                continue
+    raw_modificado = base64.urlsafe_b64encode(
+        original.as_bytes(unixfrom=False)).decode('utf-8')
 
-            if 'attachment' in content_disposition:
-                filename = parte.get_filename()
-                adjunto = MIMEBase(*content_type.split('/'))
-                adjunto.set_payload(payload)
-                encoders.encode_base64(adjunto)
-                adjunto.add_header('Content-Disposition', 'attachment', filename=filename)
-                nuevo.attach(adjunto)
-            elif content_type == 'text/plain':
-                nuevo.attach(MIMEText(
-                    payload.decode('utf-8', errors='replace'), 'plain'))
-            elif content_type == 'text/html':
-                nuevo.attach(MIMEText(
-                    payload.decode('utf-8', errors='replace'), 'html'))
-    else:
-        payload = original.get_payload(decode=True)
-        if payload:
-            nuevo.attach(MIMEText(
-                payload.decode('utf-8', errors='replace'), 'plain'))
+    service.users().messages().send(
+        userId='me', body={'raw': raw_modificado}).execute()
 
-    raw = base64.urlsafe_b64encode(nuevo.as_bytes()).decode('utf-8')
-    service.users().messages().send(userId='me', body={'raw': raw}).execute()
 
 def etiquetar_correo(service, msg_id, label_id):
     service.users().messages().modify(
@@ -114,20 +98,21 @@ def etiquetar_correo(service, msg_id, label_id):
         body={'addLabelIds': [label_id]}
     ).execute()
 
+
 def procesar_correos():
     print(f"\n🔍 Iniciando procesamiento - {datetime.datetime.now()}")
     service = autenticar_gmail()
 
     perfil = service.users().getProfile(userId='me').execute()
     print(f"Cuenta autenticada: {perfil.get('emailAddress')}")
-    
+
     label_id = obtener_id_etiqueta(service, ETIQUETA_GMAIL)
 
     if not label_id:
         print(f"❌ No se encontró la etiqueta '{ETIQUETA_GMAIL}'")
         return
 
-    query = f"-from:{CORREO_ORIGEN} -subject:FWD"
+    query   = f"-from:{CORREO_ORIGEN} -subject:FWD"
     results = service.users().messages().list(
         userId='me', q=query, maxResults=LIMITE_CORREOS_TEST).execute()
 
@@ -137,7 +122,7 @@ def procesar_correos():
         return
 
     for msg in mensajes:
-        msg_id = msg['id']
+        msg_id   = msg['id']
         msg_data = service.users().messages().get(userId='me', id=msg_id).execute()
         label_ids = msg_data.get('labelIds', [])
 
@@ -174,11 +159,12 @@ def procesar_correos():
 
             for _, _, datos in facturas_validas:
                 if not ya_existe(datos.get('clave')):
-                    datos['estado'] = "reenviado"
+                    datos['estado']       = "reenviado"
                     datos['fecha_reenvio'] = datetime.datetime.now().isoformat()
                     guardar_factura(datos)
         except Exception as e:
             print(f"❌ Error al procesar {msg_id}: {e}")
+
 
 if __name__ == "__main__":
     procesar_correos()
