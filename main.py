@@ -23,9 +23,11 @@ def autenticar_gmail():
     if token_data:
         with open('token.json', 'w') as f:
             f.write(token_data)
+
     creds = Credentials.from_authorized_user_file('token.json', SCOPES)
     if creds and creds.expired and creds.refresh_token:
         creds.refresh(Request())
+
     return build('gmail', 'v1', credentials=creds)
 
 
@@ -69,7 +71,7 @@ def tiene_adjunto_xml(service, msg_id):
 
         es_xml = (
             nombre.lower().endswith('.xml')
-            or mime_type in ('text/xml', 'application/xml', 'application/octet-stream')
+            or mime_type in ('text/xml', 'application/xml')
         )
 
         if not es_xml:
@@ -96,14 +98,11 @@ def tiene_adjunto_xml(service, msg_id):
 
 
 def reenviar_correo(service, msg_id, destino, reintentos=3, espera=5):
-    """
-    Reenvía el correo de forma FIEL al original.
-    Obtiene el RAW completo y modifica SOLO los headers To:/From:/Message-ID,
-    dejando body, HTML, adjuntos e imágenes inline 100% intactos.
-    Reintenta hasta `reintentos` veces ante errores transitorios.
-    """
     msg_raw = service.users().messages().get(
-        userId='me', id=msg_id, format='raw').execute()
+        userId='me',
+        id=msg_id,
+        format='raw'
+    ).execute()
 
     raw_bytes = base64.urlsafe_b64decode(msg_raw['raw'])
     original = email.message_from_bytes(raw_bytes, policy=email_policy.compat32)
@@ -126,7 +125,9 @@ def reenviar_correo(service, msg_id, destino, reintentos=3, espera=5):
     for intento in range(1, reintentos + 1):
         try:
             service.users().messages().send(
-                userId='me', body={'raw': raw_modificado}).execute()
+                userId='me',
+                body={'raw': raw_modificado}
+            ).execute()
             return
         except Exception as e:
             print(f"⚠️ Intento {intento}/{reintentos} fallido para {msg_id}: {e}")
@@ -159,7 +160,10 @@ def procesar_correos():
 
     query = f"-from:{CORREO_ORIGEN} -subject:FWD"
     results = service.users().messages().list(
-        userId='me', q=query, maxResults=LIMITE_CORREOS_TEST).execute()
+        userId='me',
+        q=query,
+        maxResults=LIMITE_CORREOS_TEST
+    ).execute()
 
     mensajes = results.get('messages', [])
     if not mensajes:
@@ -171,32 +175,15 @@ def procesar_correos():
         msg_data = service.users().messages().get(userId='me', id=msg_id).execute()
         label_ids = msg_data.get('labelIds', [])
 
-        print(f" Procesando msg_id={msg_id} | etiquetas={label_ids}")
+        print(f"Procesando msg_id={msg_id} | etiquetas={label_ids}")
 
         if label_id in label_ids:
             continue
 
         xmls = tiene_adjunto_xml(service, msg_id)
+
         if not xmls:
             print(f"⏭️ Sin XMLs, saltando correo {msg_id}")
-            etiquetar_correo(service, msg_id, label_id)
-            continue
-
-        facturas_validas = []
-        for nombre, contenido in xmls:
-            datos = parsear_xml(contenido)
-            if datos is not None:
-                facturas_validas.append((nombre, contenido, datos))
-
-        if not facturas_validas:
-            print(f"⏭️ XMLs no válidos para factura electrónica en correo {msg_id}")
-            etiquetar_correo(service, msg_id, label_id)
-            continue
-
-        hay_nuevas = any(not ya_existe(d.get('clave')) for _, _, d in facturas_validas)
-
-        if not hay_nuevas:
-            print("⏭️ Facturas ya procesadas previamente...")
             etiquetar_correo(service, msg_id, label_id)
             continue
 
@@ -205,14 +192,23 @@ def procesar_correos():
             etiquetar_correo(service, msg_id, label_id)
             print(f"✅ Reenviado y etiquetado: {msg_id}")
 
-            for _, _, datos in facturas_validas:
-                if not ya_existe(datos.get('clave')):
-                    datos['estado'] = "reenviado"
-                    datos['fecha_reenvio'] = datetime.datetime.now().isoformat()
-                    guardar_factura(datos)
+            for nombre, contenido in xmls:
+                datos = parsear_xml(contenido)
+
+                if datos is None:
+                    print(f"⚠️ No se pudo parsear XML: {nombre}")
+                    continue
+
+                if ya_existe(datos.get('clave')):
+                    print(f"⚠️ Factura duplicada ignorada: {datos.get('clave')}")
+                    continue
+
+                datos['estado'] = "reenviado"
+                datos['fecha_reenvio'] = datetime.datetime.now().isoformat()
+                guardar_factura(datos)
 
         except Exception as e:
-            print(f"❌ Error al procesar {msg_id} luego de 3 intentos: {e}")
+            print(f"❌ Error al procesar {msg_id}: {e}")
 
 
 if __name__ == "__main__":
