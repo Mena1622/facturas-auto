@@ -1,4 +1,5 @@
 import datetime
+import calendar
 import os
 import base64
 from email.mime.multipart import MIMEMultipart
@@ -16,7 +17,9 @@ from google.oauth2.credentials import Credentials
 from supabase import create_client
 from config import SUPABASE_URL, SUPABASE_KEY, CORREO_REPORTE_DESTINO
 
+
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 
 SCOPES = ['https://www.googleapis.com/auth/gmail.send']
 AZUL_OSCURO = colors.HexColor("#1B2A4A")
@@ -26,6 +29,13 @@ GRIS_BORDE = colors.HexColor("#D0D7E3")
 VERDE_TOTAL = colors.HexColor("#2E7D32")
 BLANCO = colors.white
 NEGRO = colors.HexColor("#1B2A4A")
+
+MESES_ES = {
+    1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+    5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+    9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+}
+
 
 def autenticar_gmail():
     token_data = os.getenv("GMAIL_TOKEN")
@@ -37,12 +47,15 @@ def autenticar_gmail():
         creds.refresh(Request())
     return build('gmail', 'v1', credentials=creds)
 
+
 def formato_colones(monto):
     return f"₡{monto:,.2f}"
 
+
 def obtener_facturas_del_mes(anio, mes):
     desde = f"{anio}-{mes:02d}-01"
-    hasta = f"{anio}-{mes:02d}-31"
+    ultimo_dia = calendar.monthrange(anio, mes)[1]
+    hasta = f"{anio}-{mes:02d}-{ultimo_dia:02d}"
     result = (
         supabase.table('facturas')
         .select('*')
@@ -51,6 +64,7 @@ def obtener_facturas_del_mes(anio, mes):
         .execute()
     )
     return result.data
+
 
 def enviar_por_gmail(service, archivo, nombre_mes):
     msg = MIMEMultipart()
@@ -73,11 +87,12 @@ def enviar_por_gmail(service, archivo, nombre_mes):
     service.users().messages().send(userId='me', body={'raw': raw}).execute()
     print(f"📧 Reporte enviado a {CORREO_REPORTE_DESTINO}")
 
+
 def generar_reporte(anio=None, mes=None):
     hoy = datetime.date.today()
-    anio = anio or hoy.year
-    mes = mes or hoy.month
-    nombre_mes = datetime.date(anio, mes, 1).strftime("%B %Y").capitalize()
+    anio = anio or int(os.getenv("REPORTE_ANIO", hoy.year))
+    mes = mes or int(os.getenv("REPORTE_MES", hoy.month))
+    nombre_mes = f"{MESES_ES[mes]} {anio}"
 
     facturas = obtener_facturas_del_mes(anio, mes)
     if not facturas:
@@ -95,13 +110,13 @@ def generar_reporte(anio=None, mes=None):
             }
         d = distribuidores[emisor]
         d['cantidad'] += 1
-        d['monto_sin_iva'] += f.get('monto_sin_iva', 0)
-        d['iva_1'] += f.get('iva_1', 0)
-        d['iva_2'] += f.get('iva_2', 0)
-        d['iva_4'] += f.get('iva_4', 0)
-        d['iva_13'] += f.get('iva_13', 0)
-        d['iva_total'] += f.get('iva_total', 0)
-        d['monto_total_con_iva'] += f.get('monto_total_con_iva', 0)
+        d['monto_sin_iva'] += float(f.get('monto_sin_iva', 0) or 0)
+        d['iva_1'] += float(f.get('iva_1', 0) or 0)
+        d['iva_2'] += float(f.get('iva_2', 0) or 0)
+        d['iva_4'] += float(f.get('iva_4', 0) or 0)
+        d['iva_13'] += float(f.get('iva_13', 0) or 0)
+        d['iva_total'] += float(f.get('iva_total', 0) or 0)
+        d['monto_total_con_iva'] += float(f.get('monto_total_con_iva', 0) or 0)
 
     total_sin_iva = sum(d['monto_sin_iva'] for d in distribuidores.values())
     total_iva_1 = sum(d['iva_1'] for d in distribuidores.values())
@@ -131,7 +146,7 @@ def generar_reporte(anio=None, mes=None):
     elementos.append(Paragraph("Reporte de Facturas Electrónicas", titulo_style))
     elementos.append(Paragraph(nombre_mes, mes_style))
     elementos.append(Paragraph(
-        f"Generado el {hoy.strftime('%d de %B de %Y')} · "
+        f"Generado el {hoy.day} de {MESES_ES[hoy.month].lower()} de {hoy.year} · "
         f"{len(facturas)} factura{'s' if len(facturas) != 1 else ''} procesada{'s' if len(facturas) != 1 else ''}",
         meta_style
     ))
@@ -214,6 +229,7 @@ def generar_reporte(anio=None, mes=None):
         print("Se envió correctamente el reporte.")
     except Exception as e:
         print(f"❌ Error enviando el reporte: {e}")
+
 
 if __name__ == "__main__":
     generar_reporte()
