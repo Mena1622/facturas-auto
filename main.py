@@ -126,6 +126,8 @@ def procesar_correos():
         msg_data = service.users().messages().get(userId='me', id=msg_id).execute()
         label_ids = msg_data.get('labelIds', [])
 
+        print(f" Procesando msg_id={msg_id} | etiquetas={label_ids}")
+
         if label_id in label_ids:
             continue
 
