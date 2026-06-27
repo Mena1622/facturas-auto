@@ -40,27 +40,58 @@ def obtener_id_etiqueta(service, nombre):
 
 
 def collect_parts(payload):
-    result = []
-    if payload.get('filename'):
-        result.append(payload)
-    for p in payload.get('parts', []):
-        result += collect_parts(p)
-    return result
+    partes = []
+
+    def walk(part):
+        partes.append(part)
+        for child in part.get('parts', []):
+            walk(child)
+
+    walk(payload)
+    return partes
+
+
+def _decode_base64url(data):
+    if not data:
+        return None
+    return base64.urlsafe_b64decode(data.encode('utf-8'))
 
 
 def tiene_adjunto_xml(service, msg_id):
     msg = service.users().messages().get(userId='me', id=msg_id).execute()
     partes = collect_parts(msg.get('payload', {}))
     xmls = []
+
     for parte in partes:
-        nombre = parte.get('filename', '')
-        if nombre.lower().endswith('.xml'):
-            attachment_id = parte.get('body', {}).get('attachmentId')
-            if attachment_id:
-                att = service.users().messages().attachments().get(
-                    userId='me', messageId=msg_id, id=attachment_id).execute()
-                datos = base64.urlsafe_b64decode(att['data'])
-                xmls.append((nombre, datos))
+        nombre = (parte.get('filename') or '').strip()
+        mime_type = (parte.get('mimeType') or '').lower()
+        body = parte.get('body', {}) or {}
+
+        es_xml = (
+            nombre.lower().endswith('.xml')
+            or mime_type in ('text/xml', 'application/xml', 'application/octet-stream')
+        )
+
+        if not es_xml:
+            continue
+
+        datos = None
+        attachment_id = body.get('attachmentId')
+
+        if attachment_id:
+            att = service.users().messages().attachments().get(
+                userId='me',
+                messageId=msg_id,
+                id=attachment_id
+            ).execute()
+            datos = _decode_base64url(att.get('data'))
+        elif body.get('data'):
+            datos = _decode_base64url(body.get('data'))
+
+        if datos:
+            nombre_final = nombre or f"adjunto_{len(xmls) + 1}.xml"
+            xmls.append((nombre_final, datos))
+
     return xmls
 
 
@@ -77,28 +108,32 @@ def reenviar_correo(service, msg_id, destino, reintentos=3, espera=5):
     raw_bytes = base64.urlsafe_b64decode(msg_raw['raw'])
     original = email.message_from_bytes(raw_bytes, policy=email_policy.compat32)
 
-    for header in ['To', 'Cc', 'Bcc', 'From', 'Message-ID',
-                   'DKIM-Signature', 'ARC-Seal',
-                   'ARC-Message-Signature', 'ARC-Authentication-Results']:
-        del original[header]
+    for header in [
+        'To', 'Cc', 'Bcc', 'From', 'Message-ID',
+        'DKIM-Signature', 'ARC-Seal',
+        'ARC-Message-Signature', 'ARC-Authentication-Results'
+    ]:
+        if header in original:
+            del original[header]
 
     original['From'] = CORREO_ORIGEN
     original['To'] = destino
 
     raw_modificado = base64.urlsafe_b64encode(
-        original.as_bytes(unixfrom=False)).decode('utf-8')
+        original.as_bytes(unixfrom=False)
+    ).decode('utf-8')
 
     for intento in range(1, reintentos + 1):
         try:
             service.users().messages().send(
                 userId='me', body={'raw': raw_modificado}).execute()
-            return  # éxito
+            return
         except Exception as e:
-            print(f"⚠️  Intento {intento}/{reintentos} fallido para {msg_id}: {e}")
+            print(f"⚠️ Intento {intento}/{reintentos} fallido para {msg_id}: {e}")
             if intento < reintentos:
-                time.sleep(espera * intento)  # espera 5s, 10s, 15s...
+                time.sleep(espera * intento)
             else:
-                raise  # agotó reintentos, propagar el error
+                raise
 
 
 def etiquetar_correo(service, msg_id, label_id):
@@ -143,7 +178,7 @@ def procesar_correos():
 
         xmls = tiene_adjunto_xml(service, msg_id)
         if not xmls:
-            print(f"⏭️  Sin XMLs, saltando correo {msg_id}")
+            print(f"⏭️ Sin XMLs, saltando correo {msg_id}")
             etiquetar_correo(service, msg_id, label_id)
             continue
 
@@ -154,13 +189,14 @@ def procesar_correos():
                 facturas_validas.append((nombre, contenido, datos))
 
         if not facturas_validas:
+            print(f"⏭️ XMLs no válidos para factura electrónica en correo {msg_id}")
             etiquetar_correo(service, msg_id, label_id)
             continue
 
         hay_nuevas = any(not ya_existe(d.get('clave')) for _, _, d in facturas_validas)
 
         if not hay_nuevas:
-            print(f"⏭️  Facturas ya procesadas previamente...")
+            print("⏭️ Facturas ya procesadas previamente...")
             etiquetar_correo(service, msg_id, label_id)
             continue
 
@@ -176,7 +212,7 @@ def procesar_correos():
                     guardar_factura(datos)
 
         except Exception as e:
-            print(f"❌ Error al procesar {msg_id} luego de {3} intentos: {e}")
+            print(f"❌ Error al procesar {msg_id} luego de 3 intentos: {e}")
 
 
 if __name__ == "__main__":

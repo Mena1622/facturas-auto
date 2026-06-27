@@ -11,23 +11,28 @@ TIPOS_VALIDOS = [
 ]
 
 # La <Tarifa> (%) determina el bucket real de IVA, NO el <Codigo>.
-# El esquema DGT CR v4.x usa código 01 y 08 para IVA genérico;
-# los códigos 05, 06, 07 son exenciones/exoneraciones (no se suman).
+# En DGT CR v4.x, 05, 06 y 07 corresponden a exenciones/exoneraciones.
 CODIGOS_IVA_EXENTOS = {'05', '06', '07'}
 
 TARIFA_A_CAMPO = {
-    1.0:  'iva_1',
-    2.0:  'iva_2',
-    4.0:  'iva_4',
+    1.0: 'iva_1',
+    2.0: 'iva_2',
+    4.0: 'iva_4',
     13.0: 'iva_13',
 }
 
 
 def _safe_float(el):
     try:
-        return float(el.text) if el is not None else 0.0
+        if el is None or el.text is None:
+            return 0.0
+        return float(el.text)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _round2(valor):
+    return round(float(valor or 0.0), 2)
 
 
 def parsear_xml(contenido_xml):
@@ -41,50 +46,66 @@ def parsear_xml(contenido_xml):
         ns = root.tag.split('}')[0].strip('{') if '}' in root.tag else ''
         prefix = f'{{{ns}}}' if ns else ''
 
-        clave = root.find(f'{prefix}Clave')
-        clave = clave.text if clave is not None else None
+        clave_el = root.find(f'{prefix}Clave')
+        clave = clave_el.text.strip() if clave_el is not None and clave_el.text else None
 
-        emisor = root.find(f'{prefix}Emisor/{prefix}Nombre')
-        emisor = emisor.text if emisor is not None else 'Desconocido'
+        emisor_el = root.find(f'{prefix}Emisor/{prefix}Nombre')
+        emisor = emisor_el.text.strip() if emisor_el is not None and emisor_el.text else 'Desconocido'
 
-        fecha = root.find(f'{prefix}FechaEmision')
-        fecha = fecha.text[:10] if fecha is not None else None
+        fecha_el = root.find(f'{prefix}FechaEmision')
+        fecha = fecha_el.text[:10] if fecha_el is not None and fecha_el.text else None
 
         resumen = root.find(f'{prefix}ResumenFactura')
         monto_sin_iva = _safe_float(resumen.find(f'{prefix}TotalVentaNeta') if resumen is not None else None)
-        monto_total   = _safe_float(resumen.find(f'{prefix}TotalComprobante') if resumen is not None else None)
+        monto_total = _safe_float(resumen.find(f'{prefix}TotalComprobante') if resumen is not None else None)
+        total_impuesto_resumen = _safe_float(resumen.find(f'{prefix}TotalImpuesto') if resumen is not None else None)
 
-        iva = {'iva_13': 0.0, 'iva_1': 0.0, 'iva_2': 0.0, 'iva_4': 0.0}
+        iva = {
+            'iva_13': 0.0,
+            'iva_1': 0.0,
+            'iva_2': 0.0,
+            'iva_4': 0.0,
+        }
 
         for linea in root.findall(f'{prefix}DetalleServicio/{prefix}LineaDetalle'):
-            for impuesto in linea.findall(f'{prefix}Impuesto'):  # findall = todos los impuestos por línea
+            for impuesto in linea.findall(f'{prefix}Impuesto'):
                 codigo_el = impuesto.find(f'{prefix}Codigo')
-                monto_el  = impuesto.find(f'{prefix}Monto')
+                monto_el = impuesto.find(f'{prefix}Monto')
                 tarifa_el = impuesto.find(f'{prefix}Tarifa')
 
-                if codigo_el is None or monto_el is None:
-                    continue
-                if codigo_el.text in CODIGOS_IVA_EXENTOS:
+                codigo = codigo_el.text.strip() if codigo_el is not None and codigo_el.text else None
+                if not codigo or monto_el is None:
                     continue
 
-                monto_imp  = _safe_float(monto_el)
-                tarifa     = _safe_float(tarifa_el)
-                campo      = TARIFA_A_CAMPO.get(round(tarifa, 0), 'iva_13')  # fallback seguro a 13%
+                if codigo in CODIGOS_IVA_EXENTOS:
+                    continue
+
+                monto_imp = _safe_float(monto_el)
+                tarifa = round(_safe_float(tarifa_el), 0)
+
+                campo = TARIFA_A_CAMPO.get(tarifa)
+                if campo is None:
+                    campo = 'iva_13'
+
                 iva[campo] += monto_imp
 
-        iva_total = sum(iva.values())
+        iva_total_detalle = sum(iva.values())
+        iva_total = iva_total_detalle
+
+        if total_impuesto_resumen > 0 and abs(total_impuesto_resumen - iva_total_detalle) > 0.02:
+            iva_total = total_impuesto_resumen
 
         return {
-            'clave':               clave,
-            'emisor':              emisor,
-            'fecha_recibido':      fecha,
-            'monto_sin_iva':       round(monto_sin_iva, 2),
-            'iva_13':              round(iva['iva_13'], 2),
-            'iva_1':               round(iva['iva_1'],  2),
-            'iva_2':               round(iva['iva_2'],  2),
-            'iva_4':               round(iva['iva_4'],  2),
-            'iva_total':           round(iva_total, 2),
-            'monto_total_con_iva':  round(monto_total, 2),
+            'clave': clave,
+            'emisor': emisor,
+            'fecha_recibido': fecha,
+            'monto_sin_iva': _round2(monto_sin_iva),
+            'iva_13': _round2(iva['iva_13']),
+            'iva_1': _round2(iva['iva_1']),
+            'iva_2': _round2(iva['iva_2']),
+            'iva_4': _round2(iva['iva_4']),
+            'iva_total': _round2(iva_total),
+            'monto_total_con_iva': _round2(monto_total),
         }
 
     except Exception as e:
