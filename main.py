@@ -1,5 +1,6 @@
 import base64
 import os
+import time
 import datetime
 import email
 from email import policy as email_policy
@@ -63,32 +64,41 @@ def tiene_adjunto_xml(service, msg_id):
     return xmls
 
 
-def reenviar_correo(service, msg_id, destino):
+def reenviar_correo(service, msg_id, destino, reintentos=3, espera=5):
     """
     Reenvía el correo de forma FIEL al original.
     Obtiene el RAW completo y modifica SOLO los headers To:/From:/Message-ID,
     dejando body, HTML, adjuntos e imágenes inline 100% intactos.
+    Reintenta hasta `reintentos` veces ante errores transitorios.
     """
     msg_raw = service.users().messages().get(
         userId='me', id=msg_id, format='raw').execute()
 
     raw_bytes = base64.urlsafe_b64decode(msg_raw['raw'])
-    original  = email.message_from_bytes(raw_bytes, policy=email_policy.compat32)
+    original = email.message_from_bytes(raw_bytes, policy=email_policy.compat32)
 
-    # Eliminar headers de enrutamiento/autenticación del mensaje original
     for header in ['To', 'Cc', 'Bcc', 'From', 'Message-ID',
                    'DKIM-Signature', 'ARC-Seal',
                    'ARC-Message-Signature', 'ARC-Authentication-Results']:
         del original[header]
 
     original['From'] = CORREO_ORIGEN
-    original['To']   = destino
+    original['To'] = destino
 
     raw_modificado = base64.urlsafe_b64encode(
         original.as_bytes(unixfrom=False)).decode('utf-8')
 
-    service.users().messages().send(
-        userId='me', body={'raw': raw_modificado}).execute()
+    for intento in range(1, reintentos + 1):
+        try:
+            service.users().messages().send(
+                userId='me', body={'raw': raw_modificado}).execute()
+            return  # éxito
+        except Exception as e:
+            print(f"⚠️  Intento {intento}/{reintentos} fallido para {msg_id}: {e}")
+            if intento < reintentos:
+                time.sleep(espera * intento)  # espera 5s, 10s, 15s...
+            else:
+                raise  # agotó reintentos, propagar el error
 
 
 def etiquetar_correo(service, msg_id, label_id):
@@ -112,7 +122,7 @@ def procesar_correos():
         print(f"❌ No se encontró la etiqueta '{ETIQUETA_GMAIL}'")
         return
 
-    query   = f"-from:{CORREO_ORIGEN} -subject:FWD"
+    query = f"-from:{CORREO_ORIGEN} -subject:FWD"
     results = service.users().messages().list(
         userId='me', q=query, maxResults=LIMITE_CORREOS_TEST).execute()
 
@@ -122,7 +132,7 @@ def procesar_correos():
         return
 
     for msg in mensajes:
-        msg_id   = msg['id']
+        msg_id = msg['id']
         msg_data = service.users().messages().get(userId='me', id=msg_id).execute()
         label_ids = msg_data.get('labelIds', [])
 
@@ -161,11 +171,12 @@ def procesar_correos():
 
             for _, _, datos in facturas_validas:
                 if not ya_existe(datos.get('clave')):
-                    datos['estado']       = "reenviado"
+                    datos['estado'] = "reenviado"
                     datos['fecha_reenvio'] = datetime.datetime.now().isoformat()
                     guardar_factura(datos)
+
         except Exception as e:
-            print(f"❌ Error al procesar {msg_id}: {e}")
+            print(f"❌ Error al procesar {msg_id} luego de {3} intentos: {e}")
 
 
 if __name__ == "__main__":
