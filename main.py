@@ -13,8 +13,8 @@ from config import CORREO_DESTINO, CORREO_ORIGEN, ETIQUETA_GMAIL, LIMITE_CORREOS
 
 
 SCOPES = [
-    'https://www.googleapis.com/auth/gmail.modify',
-    'https://www.googleapis.com/auth/gmail.send',
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.send",
 ]
 
 
@@ -39,6 +39,34 @@ def obtener_id_etiqueta(service, nombre):
         if label["name"] == nombre:
             return label["id"]
     return None
+
+
+def listar_todos_los_mensajes(service, query, limite_total):
+    mensajes = []
+    page_token = None
+
+    while True:
+        params = {
+            "userId": "me",
+            "q": query,
+            "maxResults": min(100, max(1, limite_total - len(mensajes)))
+        }
+
+        if page_token:
+            params["pageToken"] = page_token
+
+        response = service.users().messages().list(**params).execute()
+        batch = response.get("messages", [])
+        mensajes.extend(batch)
+
+        if len(mensajes) >= limite_total:
+            return mensajes[:limite_total]
+
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+
+    return mensajes
 
 
 def collect_parts(payload):
@@ -66,7 +94,7 @@ def obtener_adjuntos_relevantes(service, msg_id):
     partes = collect_parts(msg.get("payload", {}))
 
     xmls = []
-    tiene_pdf = False
+    pdfs = []
 
     for parte in partes:
         nombre = (parte.get("filename") or "").strip()
@@ -80,7 +108,7 @@ def obtener_adjuntos_relevantes(service, msg_id):
         es_pdf = nombre.lower().endswith(".pdf") or mime_type == "application/pdf"
 
         if es_pdf:
-            tiene_pdf = True
+            pdfs.append(nombre or "[pdf_sin_nombre]")
 
         if not es_xml:
             continue
@@ -106,7 +134,8 @@ def obtener_adjuntos_relevantes(service, msg_id):
             print(f"⚠️ Error leyendo adjunto {nombre or '[sin nombre]'} en {msg_id}: {e}")
 
     return {
-        "tiene_pdf": tiene_pdf,
+        "tiene_pdf": len(pdfs) > 0,
+        "pdfs": pdfs,
         "xmls": xmls,
     }
 
@@ -138,11 +167,11 @@ def reenviar_correo(service, msg_id, destino, reintentos=3, espera=5):
 
     for intento in range(1, reintentos + 1):
         try:
-            service.users().messages().send(
+            enviado = service.users().messages().send(
                 userId="me",
                 body={"raw": raw_modificado}
             ).execute()
-            return
+            return enviado.get("id")
         except Exception as e:
             print(f"⚠️ Intento {intento}/{reintentos} fallido para {msg_id}: {e}")
             if intento < reintentos:
@@ -171,17 +200,20 @@ def procesar_correos():
         print(f"❌ No se encontró la etiqueta '{ETIQUETA_GMAIL}'")
         return
 
-    query = f"-from:{CORREO_ORIGEN} -subject:FWD"
-    results = service.users().messages().list(
-        userId="me",
-        q=query,
-        maxResults=LIMITE_CORREOS_TEST
-    ).execute()
+    query = f'-from:{CORREO_ORIGEN} -subject:FWD has:attachment'
+    mensajes = listar_todos_los_mensajes(service, query, LIMITE_CORREOS_TEST)
 
-    mensajes = results.get("messages", [])
+    print(f"📨 Mensajes encontrados: {len(mensajes)}")
+
     if not mensajes:
         print("📭 No hay correos recientes.")
         return
+
+    reenviados = 0
+    guardadas = 0
+    saltados_etiqueta = 0
+    saltados_sin_adjuntos = 0
+    errores = 0
 
     for msg in mensajes:
         msg_id = msg["id"]
@@ -191,21 +223,26 @@ def procesar_correos():
         print(f"Procesando msg_id={msg_id} | etiquetas={label_ids}")
 
         if label_id in label_ids:
+            saltados_etiqueta += 1
             continue
 
         adjuntos = obtener_adjuntos_relevantes(service, msg_id)
         tiene_pdf = adjuntos["tiene_pdf"]
         xmls = adjuntos["xmls"]
 
+        print(f"   Adjuntos detectados -> PDFs: {len(adjuntos['pdfs'])}, XMLs: {len(xmls)}")
+
         if not tiene_pdf and not xmls:
             print(f"⏭️ Sin PDF ni XML, saltando correo {msg_id}")
             etiquetar_correo(service, msg_id, label_id)
+            saltados_sin_adjuntos += 1
             continue
 
         try:
-            reenviar_correo(service, msg_id, CORREO_DESTINO)
+            enviado_id = reenviar_correo(service, msg_id, CORREO_DESTINO)
             etiquetar_correo(service, msg_id, label_id)
-            print(f"✅ Reenviado y etiquetado: {msg_id}")
+            reenviados += 1
+            print(f"✅ Reenviado y etiquetado: {msg_id} -> enviado_id={enviado_id}")
 
             for nombre, contenido in xmls:
                 datos = parsear_xml(contenido)
@@ -220,10 +257,22 @@ def procesar_correos():
 
                 datos["estado"] = "reenviado"
                 datos["fecha_reenvio"] = datetime.datetime.now().isoformat()
+                datos["gmail_msg_id"] = msg_id
+                datos["nombre_xml"] = nombre
                 guardar_factura(datos)
+                guardadas += 1
 
         except Exception as e:
+            errores += 1
             print(f"❌ Error al procesar {msg_id}: {e}")
+
+    print("\n📊 Resumen:")
+    print(f"- Encontrados: {len(mensajes)}")
+    print(f"- Reenviados: {reenviados}")
+    print(f"- Facturas guardadas: {guardadas}")
+    print(f"- Saltados por etiqueta: {saltados_etiqueta}")
+    print(f"- Saltados sin adjuntos relevantes: {saltados_sin_adjuntos}")
+    print(f"- Errores: {errores}")
 
 
 if __name__ == "__main__":
